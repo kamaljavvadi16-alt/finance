@@ -295,10 +295,11 @@ c1, c2 = st.columns([3, 2])
 with c1:
     st.subheader(f"Corpus over time ({terms_label})")
     log_y = st.toggle("Log scale", value=False, key="log_corpus")
-    fig = px.line(
-        monthly_corpus_view.reset_index().rename(columns={"index": "date", 0: "Corpus (₹)", "corpus": "Corpus (₹)"}),
-        x="date", y="Corpus (₹)",
-    )
+    corpus_df = pd.DataFrame({
+        "date": monthly_corpus_view.index,
+        "Corpus (₹)": monthly_corpus_view.values,
+    })
+    fig = px.line(corpus_df, x="date", y="Corpus (₹)")
     if log_y:
         fig.update_yaxes(type="log")
     else:
@@ -332,8 +333,8 @@ with c2:
 st.subheader(f"Asset composition over time ({terms_label})")
 comp = per_asset_corpus_view.copy()
 comp.columns = [ASSETS[c].label for c in comp.columns]
-comp_long = comp.reset_index().melt(id_vars="index", var_name="Asset", value_name="Corpus (₹)")
-comp_long = comp_long.rename(columns={"index": "date"})
+comp.index.name = "date"
+comp_long = comp.reset_index().melt(id_vars="date", var_name="Asset", value_name="Corpus (₹)")
 fig2 = px.area(comp_long, x="date", y="Corpus (₹)", color="Asset", groupnorm=None)
 tv2, tt2 = indian_ticks(float(comp.sum(axis=1).max()))
 fig2.update_yaxes(tickvals=tv2, ticktext=tt2)
