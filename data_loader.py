@@ -1,7 +1,9 @@
 """Price and rate data loaders for the FIRE/SWP simulator.
 
-Equity indices come from yfinance (monthly close, cached for 1 day).
-CPI and FD rates come from static CSVs in `static_data/`.
+All historical data — equity index monthly closes, CPI, FD rates, tax rates —
+comes from static CSVs in `static_data/`. The equity CSV is pre-fetched
+locally via `tools/refresh_equity_data.py`; this avoids calling yfinance at
+runtime, which is blocked from cloud datacenter IPs (Streamlit Cloud etc.).
 """
 from __future__ import annotations
 
@@ -11,7 +13,6 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-import yfinance as yf
 
 STATIC_DIR = Path(__file__).parent / "static_data"
 
@@ -30,7 +31,7 @@ ASSETS: dict[str, AssetMeta] = {
     "NIFTY50":   AssetMeta("NIFTY50",   "Nifty 50",                  "^NSEI",    date(2007, 9, 1)),
     "SENSEX":    AssetMeta("SENSEX",    "Sensex",                    "^BSESN",   date(1997, 7, 1)),
     "BANKNIFTY": AssetMeta("BANKNIFTY", "Bank Nifty",                "^NSEBANK", date(2007, 9, 1)),
-    "NIFTY500":  AssetMeta("NIFTY500",  "Equity MF (Nifty 500 proxy)", "^CRSLDX", date(2007, 9, 1)),
+    "NIFTY500":  AssetMeta("NIFTY500",  "Equity MF (Nifty 500 proxy)", "^CRSLDX", date(2005, 9, 1)),
     "DEBT":      AssetMeta("DEBT",      "Debt Funds (flat 7% proxy)", None,      date(1979, 1, 1)),
     "FD":        AssetMeta("FD",        "Fixed Deposit (SBI 1-yr)",  None,      date(1979, 1, 1)),
 }
@@ -59,54 +60,36 @@ class TaxRates:
     fd_rate: float
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def _download_monthly_close(ticker: str, start: date, end: date) -> pd.Series:
-    """Fetch monthly-close series for a single yfinance ticker. Cached for 1 day."""
-    df = yf.download(
-        ticker,
-        start=start.isoformat(),
-        end=end.isoformat(),
-        interval="1mo",
-        progress=False,
-        auto_adjust=True,
-        threads=False,
-    )
-    if df is None or df.empty:
-        return pd.Series(dtype="float64", name=ticker)
-
-    # yfinance may return a MultiIndex on columns when given a single ticker in some versions.
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    close = df["Close"].dropna().astype("float64")
-    close.index = pd.to_datetime(close.index).to_period("M").to_timestamp("M")
-    close.name = ticker
-    # Collapse any duplicate month-end rows yfinance occasionally emits.
-    return close.groupby(close.index).last()
+@st.cache_data(show_spinner=False)
+def _load_equity_panel() -> pd.DataFrame:
+    """Load the bundled monthly-close CSV (one column per asset key)."""
+    df = pd.read_csv(STATIC_DIR / "equity_prices.csv", parse_dates=["date"])
+    df = df.set_index("date").sort_index()
+    df.index = df.index.to_period("M").to_timestamp("M")
+    return df
 
 
 def get_equity_panel(asset_keys: list[str], start: date, end: date) -> pd.DataFrame:
     """Return a DataFrame of monthly closes for the requested equity assets.
 
-    Columns are asset keys (not yfinance tickers). Index is month-end timestamps.
-    Months where any selected series is missing are dropped.
+    Reads from static_data/equity_prices.csv. Run tools/refresh_equity_data.py
+    locally to update that file with the latest monthly closes.
     """
     equity = [k for k in asset_keys if ASSETS[k].yf_ticker is not None]
     if not equity:
         return pd.DataFrame()
 
-    series_by_key: dict[str, pd.Series] = {}
-    for key in equity:
-        s = _download_monthly_close(ASSETS[key].yf_ticker, start, end)
-        if s.empty:
-            raise RuntimeError(
-                f"No data returned from yfinance for {key} ({ASSETS[key].yf_ticker}). "
-                "Try a later start date or check your internet connection."
-            )
-        series_by_key[key] = s
+    full = _load_equity_panel()
+    missing = [k for k in equity if k not in full.columns]
+    if missing:
+        raise RuntimeError(
+            f"static_data/equity_prices.csv is missing columns: {missing}. "
+            "Run tools/refresh_equity_data.py to regenerate it."
+        )
 
-    panel = pd.concat(series_by_key, axis=1).sort_index()
-    return panel.dropna(how="any")
+    panel = full[equity].copy()
+    mask = (panel.index >= pd.Timestamp(start)) & (panel.index <= pd.Timestamp(end))
+    return panel.loc[mask].dropna(how="any")
 
 
 @st.cache_data(show_spinner=False)

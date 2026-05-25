@@ -1,5 +1,8 @@
 streamlit==1.57.0
-yfinance==1.4.0
 pandas==3.0.3
 numpy==2.4.6
 plotly==6.7.0
+# yfinance is only needed by tools/refresh_equity_data.py and is NOT a runtime
+# dep — Streamlit Cloud does not need it. Install via:
+#   pip install yfinance==1.4.0
+# when running the refresh script locally.
