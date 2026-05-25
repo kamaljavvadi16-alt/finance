@@ -25,10 +25,12 @@ class AssetMeta:
 
 
 ASSETS: dict[str, AssetMeta] = {
-    "NIFTY50":   AssetMeta("NIFTY50",   "Nifty 50",                  "^NSEI",    date(1996, 1, 1)),
+    # earliest = realistic floor on yfinance-served data (the underlying indices have
+    # longer history, but Yahoo's coverage is narrower — see static_data/README.md).
+    "NIFTY50":   AssetMeta("NIFTY50",   "Nifty 50",                  "^NSEI",    date(2007, 9, 1)),
     "SENSEX":    AssetMeta("SENSEX",    "Sensex",                    "^BSESN",   date(1997, 7, 1)),
-    "BANKNIFTY": AssetMeta("BANKNIFTY", "Bank Nifty",                "^NSEBANK", date(2000, 1, 1)),
-    "NIFTY500":  AssetMeta("NIFTY500",  "Equity MF (Nifty 500 proxy)", "^CRSLDX", date(2007, 1, 1)),
+    "BANKNIFTY": AssetMeta("BANKNIFTY", "Bank Nifty",                "^NSEBANK", date(2007, 9, 1)),
+    "NIFTY500":  AssetMeta("NIFTY500",  "Equity MF (Nifty 500 proxy)", "^CRSLDX", date(2007, 9, 1)),
     "DEBT":      AssetMeta("DEBT",      "Debt Funds (flat 7% proxy)", None,      date(1979, 1, 1)),
     "FD":        AssetMeta("FD",        "Fixed Deposit (SBI 1-yr)",  None,      date(1979, 1, 1)),
 }

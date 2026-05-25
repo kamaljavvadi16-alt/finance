@@ -208,6 +208,17 @@ with st.spinner("Fetching historical data and running simulation…"):
         st.error(str(e))
         st.stop()
 
+    if selected_equity and not equity_panel.empty:
+        actual_start = equity_panel.index[0]
+        requested = pd.Timestamp(start_date)
+        gap_months = (actual_start.year - requested.year) * 12 + (actual_start.month - requested.month)
+        if gap_months > 1:
+            st.warning(
+                f"yfinance only has data from {actual_start.date()} for your selected equity assets — "
+                f"your simulation was truncated by {gap_months} months. "
+                f"Pick a later start date, or different assets, for a fuller backtest."
+            )
+
     cpi = load_cpi()
     fd_rates = load_fd_rates()
     tax_rates = load_tax_rates()
@@ -229,31 +240,69 @@ with st.spinner("Fetching historical data and running simulation…"):
         st.stop()
 
 
+real_terms = st.toggle(
+    "Show in real (inflation-adjusted) terms",
+    value=False, key="real_terms",
+    help="Divide every ₹ figure by cumulative CPI since start, so values are comparable in today's purchasing power.",
+)
+
+if real_terms:
+    deflator = result.inflation_index
+    monthly_corpus_view = result.monthly_corpus / deflator
+    per_asset_corpus_view = result.per_asset_corpus.div(deflator, axis=0)
+    monthly_withdrawal_view = result.monthly_withdrawal / deflator
+    monthly_tax_view = result.monthly_tax / deflator
+    peak_view = float(monthly_corpus_view.max())
+    end_view = float(monthly_corpus_view.iloc[-1])
+    nominal_cagr = result.annualized_return
+    return_view = (1.0 + nominal_cagr) / (1.0 + result.average_inflation) - 1.0
+    return_label = "Real CAGR (asset, after-infl)"
+    terms_label = "real ₹"
+else:
+    monthly_corpus_view = result.monthly_corpus
+    per_asset_corpus_view = result.per_asset_corpus
+    monthly_withdrawal_view = result.monthly_withdrawal
+    monthly_tax_view = result.monthly_tax
+    peak_view = result.peak_corpus
+    end_view = result.end_corpus
+    return_view = result.annualized_return
+    return_label = "Annualized return"
+    terms_label = "nominal ₹"
+
 k1, k2, k3, k4, k5 = st.columns(5)
 if result.survived:
     k1.metric("Corpus lasted", format_years_months(result.months_lasted), help="Survived to today — corpus never depleted.")
 else:
     k1.metric("Corpus lasted", format_years_months(result.months_lasted), help=f"Depleted: {result.depletion_month.date()}", delta="depleted", delta_color="inverse")
-k2.metric("Peak corpus", format_inr(result.peak_corpus))
-k3.metric("End corpus", format_inr(result.end_corpus))
-k4.metric("Max drawdown", f"{result.max_drawdown*100:.1f}%")
-k5.metric("Annualized return", f"{result.annualized_return*100:.2f}%")
+k2.metric("Peak corpus", format_inr(peak_view), help=terms_label)
+k3.metric("End corpus", format_inr(end_view), help=terms_label)
+k4.metric("Corpus decline from peak", f"{result.max_drawdown*100:.1f}%", help="Includes planned withdrawals — for market-only drawdown see the Risk panel.")
+k5.metric(return_label, f"{return_view*100:.2f}%", help="Asset performance, time-weighted. Money-weighted after-tax IRR shown below.")
+
+r1, r2, r3 = st.columns(3)
+r1.metric("Asset return (gross, pre-tax)", f"{result.annualized_return*100:.2f}%",
+          help="Time-weighted return of the chosen allocation, ignoring withdrawals and tax.")
+r2.metric("Effective return (after-tax)", f"{result.effective_annual_return*100:.2f}%",
+          help="Money-weighted IRR of your actual cashflows (initial corpus paid in, monthly withdrawals received, end corpus remaining). Already net of tax since tax was deducted from corpus during the run.")
+real_cagr = (1.0 + result.annualized_return) / (1.0 + result.average_inflation) - 1.0
+r3.metric("Real CAGR (inflation-adjusted)", f"{real_cagr*100:.2f}%",
+          help=f"Asset return less average inflation ({result.average_inflation*100:.2f}%). Tells you whether your corpus is keeping up with the cost of living.")
 
 st.divider()
 
 c1, c2 = st.columns([3, 2])
 
 with c1:
-    st.subheader("Corpus over time")
+    st.subheader(f"Corpus over time ({terms_label})")
     log_y = st.toggle("Log scale", value=False, key="log_corpus")
     fig = px.line(
-        result.monthly_corpus.reset_index().rename(columns={"index": "date", "corpus": "Corpus (₹)"}),
+        monthly_corpus_view.reset_index().rename(columns={"index": "date", 0: "Corpus (₹)", "corpus": "Corpus (₹)"}),
         x="date", y="Corpus (₹)",
     )
     if log_y:
         fig.update_yaxes(type="log")
     else:
-        tv, tt = indian_ticks(float(result.monthly_corpus.max()))
+        tv, tt = indian_ticks(float(monthly_corpus_view.max()))
         fig.update_yaxes(tickvals=tv, ticktext=tt)
     fig.update_layout(height=380, margin=dict(l=0, r=0, t=10, b=0))
     if result.depletion_month is not None:
@@ -265,21 +314,23 @@ with c1:
     st.plotly_chart(fig, use_container_width=True)
 
 with c2:
-    st.subheader("Risk")
+    st.subheader(f"Risk ({terms_label})")
     risk_rows = [
-        ("Total withdrawn",         format_inr(float(result.monthly_withdrawal.sum()))),
-        ("Total tax paid",          format_inr(result.total_tax_paid)),
-        ("Annualized volatility",   f"{result.annualized_volatility*100:.2f}%"),
-        ("Average inflation (CPI)", f"{result.average_inflation*100:.2f}%"),
-        ("Max drawdown",            f"{result.max_drawdown*100:.2f}%"),
-        ("Worst calendar year",     f"{result.worst_calendar_year_return*100:.2f}%"),
-        ("Longest drawdown",        f"{result.longest_drawdown_months} months"),
-        ("Survived to today",       "yes" if result.survived else "no"),
+        ("Total withdrawn",            format_inr(float(monthly_withdrawal_view.sum()))),
+        ("Total tax paid",             format_inr(float(monthly_tax_view.sum()))),
+        ("Annualized volatility",      f"{result.annualized_volatility*100:.2f}%"),
+        ("Average inflation (CPI)",    f"{result.average_inflation*100:.2f}%"),
+        ("Market max drawdown",        f"{result.market_max_drawdown*100:.2f}%"),
+        ("Longest market drawdown",    f"{result.longest_market_drawdown_months} months"),
+        ("Corpus decline from peak",   f"{result.max_drawdown*100:.2f}%"),
+        ("Months below peak corpus",   f"{result.longest_drawdown_months} months"),
+        ("Worst calendar year",        f"{result.worst_calendar_year_return*100:.2f}%"),
+        ("Survived to today",          "yes" if result.survived else "no"),
     ]
     st.table(pd.DataFrame(risk_rows, columns=["Metric", "Value"]).set_index("Metric"))
 
-st.subheader("Asset composition over time")
-comp = result.per_asset_corpus.copy()
+st.subheader(f"Asset composition over time ({terms_label})")
+comp = per_asset_corpus_view.copy()
 comp.columns = [ASSETS[c].label for c in comp.columns]
 comp_long = comp.reset_index().melt(id_vars="index", var_name="Asset", value_name="Corpus (₹)")
 comp_long = comp_long.rename(columns={"index": "date"})
@@ -289,8 +340,8 @@ fig2.update_yaxes(tickvals=tv2, ticktext=tt2)
 fig2.update_layout(height=360, margin=dict(l=0, r=0, t=10, b=0))
 st.plotly_chart(fig2, use_container_width=True)
 
-st.subheader("Monthly withdrawal (inflation-adjusted)")
-monthly_wd = result.monthly_withdrawal.iloc[1:]  # drop the t=0 zero row
+st.subheader(f"Monthly withdrawal ({terms_label})")
+monthly_wd = monthly_withdrawal_view.iloc[1:]  # drop the t=0 zero row
 wd_fig = go.Figure()
 wd_fig.add_trace(go.Scatter(
     x=monthly_wd.index, y=monthly_wd.values,
@@ -312,11 +363,11 @@ ret_fig.update_yaxes(title="Return (%)")
 ret_fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
 st.plotly_chart(ret_fig, use_container_width=True)
 
-with st.expander("Show raw monthly data"):
+with st.expander(f"Show raw monthly data ({terms_label})"):
     table = pd.DataFrame({
-        "Corpus (₹)": result.monthly_corpus,
-        "Withdrawal (₹)": result.monthly_withdrawal,
-        "Tax (₹)": result.monthly_tax,
+        "Corpus (₹)": monthly_corpus_view,
+        "Withdrawal (₹)": monthly_withdrawal_view,
+        "Tax (₹)": monthly_tax_view,
         "Return (%)": (result.monthly_return * 100).round(2),
     })
     styled = table.style.format({

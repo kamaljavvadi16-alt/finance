@@ -39,6 +39,10 @@ class SimulationResult:
     longest_drawdown_months: int
     average_inflation: float           # geometric-mean annualized CPI over the simulated months
     total_tax_paid: float              # cumulative tax (₹) deducted from corpus over the run
+    inflation_index: pd.Series         # cumulative inflation factor since t=0 (starts at 1.0)
+    effective_annual_return: float     # money-weighted IRR of user cashflows (after-tax)
+    market_max_drawdown: float         # drawdown of a hypothetical ₹1 in this allocation (no withdrawals/tax)
+    longest_market_drawdown_months: int
 
 
 def _build_timeline(
@@ -261,6 +265,40 @@ def simulate_swp(
     else:
         average_inflation = 0.0
 
+    inflation_index_vals: list[float] = [1.0]
+    cum = 1.0
+    for ts_i in timeline_used[1:]:
+        cpi_i = annual_rate_for(cpi_series, ts_i.year)
+        cum *= (1.0 + cpi_i) ** (1.0 / 12.0)
+        inflation_index_vals.append(cum)
+    inflation_index = pd.Series(inflation_index_vals, index=timeline_used, name="inflation_index")
+
+    nav = (1.0 + returns).cumprod() if len(returns) > 0 else pd.Series([], dtype="float64")
+    if len(nav) > 0:
+        market_peak = nav.cummax()
+        market_dd = (nav - market_peak) / market_peak.replace(0, np.nan)
+        market_max_drawdown = float(market_dd.min()) if not market_dd.isna().all() else 0.0
+        m_longest = 0
+        m_cur = 0
+        for v in market_dd.fillna(0).values:
+            if v < 0:
+                m_cur += 1
+                m_longest = max(m_longest, m_cur)
+            else:
+                m_cur = 0
+        longest_market_drawdown_months = int(m_longest)
+    else:
+        market_max_drawdown = 0.0
+        longest_market_drawdown_months = 0
+
+    cashflows = [-corpus]
+    last_idx = len(monthly_withdrawal) - 1
+    for i in range(1, last_idx):
+        cashflows.append(float(monthly_withdrawal.iloc[i]))
+    if last_idx >= 1:
+        cashflows.append(float(monthly_withdrawal.iloc[last_idx]) + end_corpus)
+    effective_annual_return = _money_weighted_irr_monthly(cashflows)
+
     return SimulationResult(
         monthly_corpus=monthly_corpus,
         per_asset_corpus=per_asset_corpus,
@@ -279,4 +317,37 @@ def simulate_swp(
         longest_drawdown_months=int(longest),
         average_inflation=float(average_inflation),
         total_tax_paid=float(total_tax_paid),
+        inflation_index=inflation_index,
+        effective_annual_return=float(effective_annual_return),
+        market_max_drawdown=float(market_max_drawdown),
+        longest_market_drawdown_months=int(longest_market_drawdown_months),
     )
+
+
+def _money_weighted_irr_monthly(cashflows: list[float]) -> float:
+    """Bisect for the monthly IRR of a cashflow stream, then annualize.
+
+    Cashflows are in chronological order, one per month, starting at t=0.
+    Negative = paid in (initial investment); positive = received."""
+    if not cashflows or all(cf == 0 for cf in cashflows):
+        return 0.0
+
+    def npv(r: float) -> float:
+        return sum(cf / (1.0 + r) ** t for t, cf in enumerate(cashflows))
+
+    lo, hi = -0.5, 1.0
+    npv_lo, npv_hi = npv(lo), npv(hi)
+    if npv_lo * npv_hi > 0:
+        # No sign change in bracket; IRR is undefined or extreme. Fall back to 0.
+        return 0.0
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        npv_mid = npv(mid)
+        if abs(npv_mid) < 1e-6 or (hi - lo) < 1e-10:
+            break
+        if npv_lo * npv_mid < 0:
+            hi, npv_hi = mid, npv_mid
+        else:
+            lo, npv_lo = mid, npv_mid
+    monthly = (lo + hi) / 2.0
+    return (1.0 + monthly) ** 12 - 1.0

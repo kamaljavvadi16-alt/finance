@@ -69,4 +69,13 @@ print(f"  survived={r3.survived}, months_lasted={r3.months_lasted}, "
       f"peak=₹{r3.peak_corpus/1e7:.2f}cr, end=₹{r3.end_corpus/1e7:.2f}cr, "
       f"CAGR={r3.annualized_return*100:.2f}%, max_dd={r3.max_drawdown*100:.1f}%")
 
+print("\nField sanity check on the last result:")
+for fld in ("inflation_index", "effective_annual_return",
+            "market_max_drawdown", "longest_market_drawdown_months"):
+    val = getattr(r3, fld)
+    if fld == "inflation_index":
+        print(f"  {fld}: len={len(val)}, first={float(val.iloc[0]):.4f}, last={float(val.iloc[-1]):.4f}")
+    else:
+        print(f"  {fld}: {val}")
+
 print("\nAll scenarios completed.")
