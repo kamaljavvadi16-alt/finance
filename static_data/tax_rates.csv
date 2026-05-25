@@ -1,0 +1,7 @@
+effective_date,equity_ltcg_rate,equity_ltcg_exempt_inr,debt_ltcg_rate,fd_rate,notes
+1979-01-01,0.10,0,0.10,0.30,Pre-STT era; equity & debt LTCG ~10% without indexation
+2004-10-01,0.00,0,0.10,0.30,STT introduced; equity LTCG exempt u/s 10(38)
+2014-04-01,0.00,0,0.13,0.30,Debt LTCG period -> 36 months; ~13% effective after indexation
+2018-04-01,0.10,100000,0.13,0.30,LTCG on equity reintroduced 10% above Rs 1 lakh
+2023-04-01,0.10,100000,0.30,0.30,Debt funds lose indexation; taxed at slab (top slab assumed)
+2024-07-23,0.125,125000,0.30,0.30,LTCG raised to 12.5%; exemption raised to Rs 1.25 lakh
